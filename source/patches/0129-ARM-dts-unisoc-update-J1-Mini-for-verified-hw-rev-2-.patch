@@ -1,0 +1,109 @@
+From 9e456c5b484bca0558821ec6e56f6926ddaa3488 Mon Sep 17 00:00:00 2001
+From: build <build@localhost>
+Date: Sun, 15 Nov 2026 18:39:41 +0000
+Subject: [PATCH 129/130] ARM: dts: unisoc: update J1 Mini for verified hw rev
+ 2, s6d77a1 fb at 0x9f197000, and USB tune
+
+---
+ .../boot/dts/unisoc/sc7730-samsung-j1mini.dts | 24 ++++++++++++-------
+ arch/arm/mach-sprd/bootstripes.c              |  2 +-
+ arch/arm/mach-sprd/usb-bringup.c              |  6 ++++-
+ 3 files changed, 21 insertions(+), 11 deletions(-)
+
+diff --git a/arch/arm/boot/dts/unisoc/sc7730-samsung-j1mini.dts b/arch/arm/boot/dts/unisoc/sc7730-samsung-j1mini.dts
+index f776e0360..e3ba82fbc 100644
+--- a/arch/arm/boot/dts/unisoc/sc7730-samsung-j1mini.dts
++++ b/arch/arm/boot/dts/unisoc/sc7730-samsung-j1mini.dts
+@@ -84,12 +84,18 @@ ramoops@8fe00000 {
+ 			pmsg-size = <0x20000>;
+ 		};
+ 
++		/* Samsung bootloader sec_log region (preserves log for last_kmsg) */
++		sec_log@86b00000 {
++			reg = <0x86b00000 0x100000>;
++			no-map;
++		};
++
+ 		/*
+ 		 * Vendor bootloader framebuffer scan-out buffer:
+-		 * 480 * 800 * 4 * 3 = 0x465000 bytes at 0x9F8AD000.
++		 * 480 * 800 * 4 = 0x177000 bytes at 0x9F197000 (confirmed by sboot log).
+ 		 */
+-		framebuffer@9f8ad000 {
+-			reg = <0x9f8ad000 0x465000>;
++		framebuffer@9f197000 {
++			reg = <0x9f197000 0x180000>;
+ 			no-map;
+ 		};
+ 
+@@ -110,9 +116,9 @@ linux,cma {
+ 	 * Fallback scan-out buffer left scanning out by sboot.
+ 	 * 480x800, 32bpp (ARGB/XRGB), stride 1920 (480*4).
+ 	 */
+-	framebuffer: framebuffer@9f8ad000 {
++	framebuffer: framebuffer@9f197000 {
+ 		compatible = "simple-framebuffer";
+-		reg = <0x9f8ad000 (480 * 800 * 4)>;
++		reg = <0x9f197000 (480 * 800 * 4)>;
+ 		width = <480>;
+ 		height = <800>;
+ 		stride = <(480 * 4)>;
+@@ -153,14 +159,14 @@ &usb {
+ 
+ /*
+  * I2C1: Touchscreen controller
+- * Most J1 mini units have a FocalTech FT6206 / FT6x06 digitizer.
++ * Hardware: MELFAS MCS8040L (mip4_ts) @ 0x48
+  */
+ &i2c1 {
+ 	status = "okay";
+ 
+-	touchscreen@38 {
+-		compatible = "focaltech,ft6206", "edt,edt-ft5x06";
+-		reg = <0x38>;
++	touchscreen@48 {
++		compatible = "melfas,mip4_ts";
++		reg = <0x48>;
+ 		interrupt-parent = <&gpio>;
+ 		interrupts = <232 IRQ_TYPE_EDGE_FALLING>;
+ 		touchscreen-size-x = <480>;
+diff --git a/arch/arm/mach-sprd/bootstripes.c b/arch/arm/mach-sprd/bootstripes.c
+index b59c6a951..5ee60ed75 100644
+--- a/arch/arm/mach-sprd/bootstripes.c
++++ b/arch/arm/mach-sprd/bootstripes.c
+@@ -29,7 +29,7 @@ static unsigned int fb_h = 1280;
+ 
+ /* Fallbacks: buffer reserved for display */
+ #define DT_LCD_BASE	0x9ea44000
+-#define J1_LCD_BASE	0x9f8ad000
++#define J1_LCD_BASE	0x9f197000
+ static phys_addr_t lcd_base = DT_LCD_BASE;
+ static u32 __iomem *fb;
+ 
+diff --git a/arch/arm/mach-sprd/usb-bringup.c b/arch/arm/mach-sprd/usb-bringup.c
+index c997c5263..6747a4401 100644
+--- a/arch/arm/mach-sprd/usb-bringup.c
++++ b/arch/arm/mach-sprd/usb-bringup.c
+@@ -57,6 +57,7 @@
+ 
+ /* "tune_value" of the vendor usb@f5116000 node for gtelwifi */
+ #define GTELWIFI_PHY_TUNE	0x44076e33
++#define J1MINI_PHY_TUNE		0xd1a00020
+ 
+ static void __init rmw(void __iomem *reg, u32 clr, u32 set)
+ {
+@@ -115,7 +116,10 @@ static int __init sprd_usb_bringup(void)
+ 
+ 	/* 5. PHY control and tune */
+ 	rmw(apb + 8, 0, AP_APB_PHY_CTRL_BIT9);
+-	writel(GTELWIFI_PHY_TUNE, apb);
++		if (of_machine_is_compatible("samsung,j1mini3g") || of_machine_is_compatible("samsung,j1mini"))
++		writel(J1MINI_PHY_TUNE, apb);
++	else
++		writel(GTELWIFI_PHY_TUNE, apb);
+ 
+ 	pr_info("sprd-usb: after: PWR_CTRL %08x AHB_EB %08x PHY_CTRL %08x TUNE %08x GSNPSID %08x\n",
+ 		readl(aon + AON_APB_PWR_CTRL), readl(ahb + AP_AHB_EB),
+-- 
+2.47.3
+

@@ -1,0 +1,320 @@
+From ff1504d9bf7274b6d100f8bd40160b13848a2b33 Mon Sep 17 00:00:00 2001
+From: build <build@localhost>
+Date: Sun, 15 Nov 2026 14:16:36 +0000
+Subject: [PATCH 128/130] ARM: dts: unisoc: add Samsung Galaxy J1 Mini
+ (SM-J105H/F, j1mini3g)
+
+---
+ arch/arm/boot/dts/unisoc/Makefile             |   1 +
+ .../boot/dts/unisoc/sc7730-samsung-j1mini.dts | 218 ++++++++++++++++++
+ arch/arm/mach-sprd/bootstripes.c              |  29 ++-
+ 3 files changed, 236 insertions(+), 12 deletions(-)
+ create mode 100644 arch/arm/boot/dts/unisoc/sc7730-samsung-j1mini.dts
+
+diff --git a/arch/arm/boot/dts/unisoc/Makefile b/arch/arm/boot/dts/unisoc/Makefile
+index 2d8796d3d..bf70e36f6 100644
+--- a/arch/arm/boot/dts/unisoc/Makefile
++++ b/arch/arm/boot/dts/unisoc/Makefile
+@@ -6,3 +6,4 @@ dtb-$(CONFIG_ARCH_SPRD) += \
+ 	sc7730-samsung-gtelwifi.dtb \
+ 	sc7730-samsung-gtelwifi-modem.dtb \
+ 	sc7730-samsung-gtel3g.dtb
++dtb-$(CONFIG_ARCH_SPRD) += sc7730-samsung-j1mini.dtb
+diff --git a/arch/arm/boot/dts/unisoc/sc7730-samsung-j1mini.dts b/arch/arm/boot/dts/unisoc/sc7730-samsung-j1mini.dts
+new file mode 100644
+index 000000000..f776e0360
+--- /dev/null
++++ b/arch/arm/boot/dts/unisoc/sc7730-samsung-j1mini.dts
+@@ -0,0 +1,218 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Samsung Galaxy J1 mini 3G (SM-J105H / SM-J105F, "j1mini3g")
++ *
++ * SoC: Spreadtrum SC8830A / SC7731 (4x Cortex-A7, Mali-400 MP2, PMIC SC2723)
++ * RAM: 768 MiB (SM-J105H rev00-02) / 1024 MiB (rev03 / SM-J105F)
++ * Display: 4.0" 480x800 WVGA MIPI DSI video mode (Samsung S6D77A1 or Himax HX8369B)
++ * Touchscreen: FocalTech FT6206 (I2C1 @ 0x38, IRQ GPIO 232)
++ * Accelerometer: Bosch BMA250E (I2C2 @ 0x18, IRQ GPIO 238)
++ * Storage: eMMC (sdio1), microSD (sdio0)
++ * Modem: Spreadtrum SC8830 3G baseband with SIPC
++ *
++ * Inherits the SC7730/SC8830 mainline support from gtelwifi-mainline.
++ */
++
++/dts-v1/;
++
++#include "sc7730.dtsi"
++#include "sc7730-modem.dtsi"
++
++/ {
++	model = "Samsung Galaxy J1 mini (SM-J105H/F, j1mini3g)";
++	compatible = "samsung,j1mini3g", "samsung,j1mini", "sprd,sc8830", "sprd,sc7730";
++
++	/*
++	 * Board IDs matched by Spreadtrum bootloader against dt.img QCDT.
++	 * Revisions 0-3 cover all known J1 mini hardware board revisions.
++	 */
++	sprd,sc-id = <8830 0 0x20000>,
++		     <8830 1 0x20000>,
++		     <8830 2 0x20000>,
++		     <8830 3 0x20000>;
++
++	aliases {
++		serial1 = &uart1;
++		mmc0 = &sdio0;
++		mmc1 = &sdio1;
++	};
++
++	chosen {
++		bootargs = "";
++	};
++
++	/*
++	 * RAM: 768 MiB default (rev 00-02), bootloader can update size.
++	 */
++	memory@80000000 {
++		device_type = "memory";
++		reg = <0x80000000 0x30000000>;
++	};
++
++	reserved-memory {
++		#address-cells = <1>;
++		#size-cells = <1>;
++		ranges;
++
++		/* Shared memory between AP and CP (modem) */
++		smem@87800000 {
++			reg = <0x87800000 0x200000>;
++			no-map;
++		};
++
++		/* 28 MiB CP modem memory as defined in vendor J1 mini DT */
++		cp-modem@88000000 {
++			reg = <0x88000000 0x1c00000>;
++			no-map;
++		};
++
++		/* WCN modem carveout (2M+4K) */
++		cp-wcn@8a800000 {
++			reg = <0x8a800000 0x201000>;
++			no-map;
++		};
++
++		/*
++		 * Kernel crash log survives warm reboot in RAM.
++		 * Placed at 0x8fe00000 (1 MiB), safely inside unused RAM.
++		 */
++		ramoops@8fe00000 {
++			compatible = "ramoops";
++			reg = <0x8fe00000 0x100000>;
++			record-size = <0x40000>;
++			console-size = <0x40000>;
++			pmsg-size = <0x20000>;
++		};
++
++		/*
++		 * Vendor bootloader framebuffer scan-out buffer:
++		 * 480 * 800 * 4 * 3 = 0x465000 bytes at 0x9F8AD000.
++		 */
++		framebuffer@9f8ad000 {
++			reg = <0x9f8ad000 0x465000>;
++			no-map;
++		};
++
++		/*
++		 * Scan-out and GPU DMA buffers for DISPC.
++		 * 32 MiB CMA pool sized for 768 MiB total RAM.
++		 */
++		linux,cma {
++			compatible = "shared-dma-pool";
++			reusable;
++			size = <0x2000000>;
++			alloc-ranges = <0x90000000 0x8000000>;
++			linux,cma-default;
++		};
++	};
++
++	/*
++	 * Fallback scan-out buffer left scanning out by sboot.
++	 * 480x800, 32bpp (ARGB/XRGB), stride 1920 (480*4).
++	 */
++	framebuffer: framebuffer@9f8ad000 {
++		compatible = "simple-framebuffer";
++		reg = <0x9f8ad000 (480 * 800 * 4)>;
++		width = <480>;
++		height = <800>;
++		stride = <(480 * 4)>;
++		format = "x8r8g8b8";
++	};
++};
++
++/*
++ * DISPC takeover: takes over the running MIPI DSI video mode pipeline
++ * from the bootloader without resetting the display controller.
++ * Physical screen dimensions: 56 mm x 94 mm.
++ */
++&dispc {
++	width-mm = <56>;
++	height-mm = <94>;
++	status = "okay";
++};
++
++&gpu {
++	status = "okay";
++};
++
++/* MicroSD slot */
++&sdio0 {
++	status = "okay";
++};
++
++/* eMMC internal storage */
++&sdio1 {
++	status = "okay";
++};
++
++/* USB OTG / Device mode controller (dwc2) */
++&usb {
++	dr_mode = "peripheral";
++	status = "okay";
++};
++
++/*
++ * I2C1: Touchscreen controller
++ * Most J1 mini units have a FocalTech FT6206 / FT6x06 digitizer.
++ */
++&i2c1 {
++	status = "okay";
++
++	touchscreen@38 {
++		compatible = "focaltech,ft6206", "edt,edt-ft5x06";
++		reg = <0x38>;
++		interrupt-parent = <&gpio>;
++		interrupts = <232 IRQ_TYPE_EDGE_FALLING>;
++		touchscreen-size-x = <480>;
++		touchscreen-size-y = <800>;
++	};
++};
++
++/*
++ * I2C2: Sensors
++ * Accelerometer Bosch BMA250E (bma2x2)
++ */
++&i2c2 {
++	status = "okay";
++
++	accelerometer@18 {
++		compatible = "bosch,bma250e", "bosch,bma222e";
++		reg = <0x18>;
++		interrupt-parent = <&gpio>;
++		interrupts = <238 IRQ_TYPE_EDGE_RISING>;
++	};
++};
++
++/*
++ * Hardware Keypad (Volume Up, Volume Down, Home)
++ */
++&keypad {
++	keypad,num-rows = <1>;
++	keypad,num-columns = <3>;
++	status = "okay";
++};
++
++/* Modem IPC channels */
++&sipc {
++	status = "okay";
++};
++
++&scproc_cpw {
++	status = "okay";
++	reg = <0x88000000 0x1c00000>,
++	      <0x50000000 0xc>,
++	      <0x402b0000 0x10000>;
++
++	modem {
++		reg = <0x88300000 0xc00000>;
++	};
++};
++
++/ {
++	spipe-cpw { status = "okay"; };
++	slog-cpw { status = "okay"; };
++	stty-cpw { status = "okay"; };
++	seth0-cpw { status = "okay"; };
++	seth1-cpw { status = "okay"; };
++	seth2-cpw { status = "okay"; };
++};
+diff --git a/arch/arm/mach-sprd/bootstripes.c b/arch/arm/mach-sprd/bootstripes.c
+index 2daaf80b2..b59c6a951 100644
+--- a/arch/arm/mach-sprd/bootstripes.c
++++ b/arch/arm/mach-sprd/bootstripes.c
+@@ -21,14 +21,15 @@
+ #include <linux/panic_notifier.h>
+ #include <linux/sprd-bootstripes.h>
+ 
+-#define FB_W		800
+-#define FB_H		1280
+-#define FB_SIZE		(FB_W * FB_H * 4)
+-#define BAND_Y(n)	(64 + (n) * 112)
+-#define BAND_H		80
++static unsigned int fb_w = 800;
++static unsigned int fb_h = 1280;
++#define FB_SIZE		(fb_w * fb_h * 4)
++#define BAND_Y(n)	(64 + (n) * (fb_h > 1000 ? 112 : 70))
++#define BAND_H		(fb_h > 1000 ? 80 : 50)
+ 
+-/* Fallback: buffer reserved for the display by the vendor device tree */
++/* Fallbacks: buffer reserved for display */
+ #define DT_LCD_BASE	0x9ea44000
++#define J1_LCD_BASE	0x9f8ad000
+ static phys_addr_t lcd_base = DT_LCD_BASE;
+ static u32 __iomem *fb;
+ 
+@@ -48,7 +49,11 @@ static int __init sprd_lcd_base_setup(char *s)
+ 	if (!s || kstrtoul(s, 16, &v) || !v)
+ 		return 0;
+ 	lcd_base = v;
+-	if (lcd_base == DT_LCD_BASE)
++	if (lcd_base >= 0x9f000000) {
++		fb_w = 480;
++		fb_h = 800;
++	}
++	if (lcd_base == DT_LCD_BASE || lcd_base == J1_LCD_BASE)
+ 		return 0;
+ 	memblock_reserve(lcd_base, PAGE_ALIGN(FB_SIZE));
+ 	memblock_mark_nomap(lcd_base, PAGE_ALIGN(FB_SIZE));
+@@ -60,10 +65,10 @@ static void fill_rows(int y0, int h, u32 pat_a, u32 pat_b)
+ {
+ 	int x, y;
+ 
+-	for (y = y0; y < y0 + h && y < FB_H; y++)
+-		for (x = 0; x < FB_W; x++)
++	for (y = y0; y < y0 + h && y < fb_h; y++)
++		for (x = 0; x < fb_w; x++)
+ 			writel_relaxed(((x / 40 + y / 40) & 1) ? pat_b : pat_a,
+-				       fb + y * FB_W + x);
++				       fb + y * fb_w + x);
+ 	wmb();
+ }
+ 
+@@ -74,7 +79,7 @@ static bool sprd_fb_map(void)
+ 	fb = ioremap_wc(lcd_base, FB_SIZE);
+ 	if (!fb)
+ 		return false;
+-	fill_rows(0, FB_H, 0, 0);		/* clear the splash screen */
++	fill_rows(0, fb_h, 0, 0);		/* clear the splash screen */
+ 	return true;
+ }
+ 
+@@ -99,7 +104,7 @@ static int sprd_bootstripe_panic(struct notifier_block *nb,
+ 				 unsigned long event, void *unused)
+ {
+ 	if (sprd_fb_map())
+-		fill_rows(FB_H - 160, 160, ~0U, 0);
++		fill_rows(fb_h - 160, 160, ~0U, 0);
+ 	return NOTIFY_DONE;
+ }
+ 
+-- 
+2.47.3
+

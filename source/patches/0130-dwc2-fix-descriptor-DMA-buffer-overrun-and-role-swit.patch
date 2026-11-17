@@ -1,0 +1,563 @@
+From ae86e87c487ff71b0c44f252a41ba2d2527915f5 Mon Sep 17 00:00:00 2001
+From: Antigravity & shatalovie <dev@localhost>
+Date: Mon, 16 Nov 2026 11:46:21 +0000
+Subject: [PATCH 130/130] dwc2: fix descriptor DMA buffer overrun and role
+ switch for SC7730 / J1 Mini
+
+---
+ .../boot/dts/unisoc/sc7730-samsung-j1mini.dts |  47 ++++++--
+ arch/arm/boot/dts/unisoc/sc7730.dtsi          |   2 +-
+ arch/arm/mach-sprd/usb-bringup.c              | 109 +++++++++++++-----
+ drivers/usb/dwc2/core.c                       |   2 +-
+ drivers/usb/dwc2/core.h                       |   2 +-
+ drivers/usb/dwc2/gadget.c                     |  82 ++++++++++---
+ drivers/usb/dwc2/params.c                     |   2 +-
+ 7 files changed, 188 insertions(+), 58 deletions(-)
+
+diff --git a/arch/arm/boot/dts/unisoc/sc7730-samsung-j1mini.dts b/arch/arm/boot/dts/unisoc/sc7730-samsung-j1mini.dts
+index e3ba82fbc..e1a0206f8 100644
+--- a/arch/arm/boot/dts/unisoc/sc7730-samsung-j1mini.dts
++++ b/arch/arm/boot/dts/unisoc/sc7730-samsung-j1mini.dts
+@@ -33,8 +33,9 @@ / {
+ 
+ 	aliases {
+ 		serial1 = &uart1;
+-		mmc0 = &sdio0;
+-		mmc1 = &sdio1;
++		mmc0 = &emmc;
++		mmc1 = &sdio0;
++		mmc2 = &sdio1;
+ 	};
+ 
+ 	chosen {
+@@ -127,26 +128,39 @@ framebuffer: framebuffer@9f197000 {
+ };
+ 
+ /*
+- * DISPC takeover: takes over the running MIPI DSI video mode pipeline
+- * from the bootloader without resetting the display controller.
+- * Physical screen dimensions: 56 mm x 94 mm.
++ * DISPC takeover disabled for initial bringup: simpledrm owns the bootloader
++ * framebuffer cleanly and keeps fbcon console active through to userspace.
+  */
+ &dispc {
+-	width-mm = <56>;
+-	height-mm = <94>;
+-	status = "okay";
++	status = "disabled";
+ };
+ 
+ &gpu {
++	status = "disabled";
++};
++
++/* eMMC internal storage (sdio@20600000) */
++&emmc {
++	bus-width = <8>;
++	non-removable;
++	no-sd;
++	no-sdio;
++	no-1-8-v;
++	cap-mmc-highspeed;
++	mmc-ddr-3_3v;
++	max-frequency = <52000000>;
++	sprd,write-delay = <0x1b>;
++	sprd,read-pos-delay = <0x0c>;
++	sprd,read-neg-delay = <0x0c>;
+ 	status = "okay";
+ };
+ 
+-/* MicroSD slot */
++/* MicroSD slot (sdio@20300000) */
+ &sdio0 {
+ 	status = "okay";
+ };
+ 
+-/* eMMC internal storage */
++/* WLAN SDIO slot (sdio@20400000) */
+ &sdio1 {
+ 	status = "okay";
+ };
+@@ -154,6 +168,8 @@ &sdio1 {
+ /* USB OTG / Device mode controller (dwc2) */
+ &usb {
+ 	dr_mode = "peripheral";
++	role-switch-default-mode = "peripheral";
++	g-np-tx-fifo-size = <0x40>;
+ 	status = "okay";
+ };
+ 
+@@ -222,3 +238,14 @@ / {
+ 	seth1-cpw { status = "okay"; };
+ 	seth2-cpw { status = "okay"; };
+ };
++
++/*
++ * Disable cpufreq OPP table for now: SC8830 clock scaling & regulator
++ * differ from SC7730SE and cause schedutil to spam transition errors.
++ */
++&cpu0 { /delete-property/ operating-points-v2; };
++&cpu1 { /delete-property/ operating-points-v2; };
++&cpu2 { /delete-property/ operating-points-v2; };
++&cpu3 { /delete-property/ operating-points-v2; };
++/delete-node/ &cpu_opp;
++
+diff --git a/arch/arm/boot/dts/unisoc/sc7730.dtsi b/arch/arm/boot/dts/unisoc/sc7730.dtsi
+index cc83eb810..14276a3e2 100644
+--- a/arch/arm/boot/dts/unisoc/sc7730.dtsi
++++ b/arch/arm/boot/dts/unisoc/sc7730.dtsi
+@@ -510,7 +510,7 @@ usb: usb@20200000 {
+ 			usb-role-switch;
+ 			role-switch-default-mode = "peripheral";
+ 			g-rx-fifo-size = <0x320>;
+-			g-np-tx-fifo-size = <0x10>;
++			g-np-tx-fifo-size = <0x40>;
+ 			g-tx-fifo-size = <0x40 0x40 0x100 0x100 0x100 0x100 0x100
+ 					  0x80 0x80 0x80 0x80 0x80 0x80 0x80 0x100>;
+ 			status = "disabled";
+diff --git a/arch/arm/mach-sprd/usb-bringup.c b/arch/arm/mach-sprd/usb-bringup.c
+index 6747a4401..dd063eca7 100644
+--- a/arch/arm/mach-sprd/usb-bringup.c
++++ b/arch/arm/mach-sprd/usb-bringup.c
+@@ -1,21 +1,26 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /*
+- * Power up the SC7730 USB PHY so the generic dwc2 driver can run the
++ * Power up the SC7730 / SC8830 USB PHY so the generic dwc2 driver can run the
+  * controller in device mode. Bring-up hack until there are proper clock,
+  * PHY and SC2723 regulator drivers.
+  *
+  * Sequence and register map from the vendor 3.10 kernel
+- * (drivers/usb/gadget/dwc_otg/usb_hw.c: udc_enable() + usb_phy_init(),
+- * headers mach/chip_x30g/ with the tshark2 AON block):
++ * (drivers/usb/gadget/dwc_otg/usb_hw.c: udc_enable() + usb_phy_init()):
+  *
+  *   1. SC2723 LDO_USB on: ANA_GLB LDO_PD_CTRL bit 8, behind the ADI bus
+  *   2. USB PHY out of power-down: AON_APB PWR_CTRL bit 0
+  *   3. USB AHB clock on: AP_AHB EB bit 4
+- *   4. pulse USB, UTMI and PHY soft resets: AP_AHB RST bits 5..7
+- *   5. AP_APB USB_PHY_CTRL bit 9 and the board's PHY tune value
+  *
+- * The vendor driver forces the B-session valid in GOTGCTL; with dwc2 the
+- * "usb-role-switch" + "role-switch-default-mode" properties do the same.
++ * For J1 Mini (chip_x20 / SC8830 / SC7727S):
++ *   4. AP_AHB_RST bits 5, 6 pulsed
++ *   5. Set GUSBCFG (0x2020000c) bit 3 for 16-bit UTMI+ PHY width
++ *   6. Reset SPRD PHY: utmi_PORN (PIN_BASE 0x402A0000 bit 0) & utmi_rst (AHB_RST bit 7)
++ *   7. Write AP_APB REG_AP_APB_USB_CTRL0 (0x71300010) = 0xd1a00020
++ *   8. Write AP_APB REG_AP_APB_USB_CTRL1 (0x71300014) = 0x00001730
++ *
++ * For gtelwifi (chip_x30g / SC7730):
++ *   4. pulse USB, UTMI and PHY soft resets: AP_AHB RST bits 5..7
++ *   5. AP_APB USB_PHY_CTRL bit 9 and GTELWIFI_PHY_TUNE (0x44076e33)
+  */
+ 
+ #include <linux/bits.h>
+@@ -48,16 +53,26 @@
+ #define AP_APB_USB_PHY_CTRL	0x3008
+ #define AP_APB_PHY_CTRL_BIT9	BIT(9)
+ 
++/* J1 Mini (chip_x20) registers */
++#define SPRD_PIN_PHYS		0x402a0000
++#define REG_PIN_CTRL0		0x00
++#define PIN_UTMI_PORN		BIT(0)
++
++#define REG_AP_APB_USB_CTRL0	0x10
++#define REG_AP_APB_USB_CTRL1	0x14
++
+ #define USB_PHYS		0x20200000
++#define DWC2_GUSBCFG		0x0c
+ #define DWC2_GRXFSIZ		0x24
+ #define DWC2_GNPTXFSIZ		0x28
+ #define DWC2_GSNPSID		0x40
+ #define DWC2_GHWCFG(n)		(0x44 + 4 * ((n) - 1))
+ #define DWC2_DPTXFSIZN(n)	(0x104 + 4 * ((n) - 1))
+ 
+-/* "tune_value" of the vendor usb@f5116000 node for gtelwifi */
++/* "tune_value" of the vendor usb node */
+ #define GTELWIFI_PHY_TUNE	0x44076e33
+-#define J1MINI_PHY_TUNE		0xd1a00020
++#define J1MINI_PHY_TUNE_CTRL0	0xd1a00020
++#define J1MINI_PHY_TUNE_CTRL1	0x00001730
+ 
+ static void __init rmw(void __iomem *reg, u32 clr, u32 set)
+ {
+@@ -66,9 +81,10 @@ static void __init rmw(void __iomem *reg, u32 clr, u32 set)
+ 
+ static int __init sprd_usb_bringup(void)
+ {
+-	void __iomem *aon, *ahb, *apb, *usb;
++	void __iomem *aon, *ahb, *apb, *usb, *pin = NULL, *apb_base = NULL;
+ 	struct device_node *np;
+ 	u32 pd = 0, pd_new = 0, vusb = 0;
++	bool is_j1mini;
+ 	int ret;
+ 
+ 	if (!of_machine_is_compatible("sprd,sc7730"))
+@@ -81,11 +97,19 @@ static int __init sprd_usb_bringup(void)
+ 	if (!ret)
+ 		return 0;
+ 
++	is_j1mini = of_machine_is_compatible("samsung,j1mini3g") ||
++		    of_machine_is_compatible("samsung,j1mini");
++
+ 	aon = ioremap(AON_APB_PHYS, 0x100);
+ 	ahb = ioremap(AP_AHB_PHYS, 0x100);
+ 	apb = ioremap(AP_APB_PHYS + AP_APB_USB_PHY_TUNE, 0x10);
+ 	usb = ioremap(USB_PHYS, 0x200);
+-	if (!aon || !ahb || !apb || !usb) {
++	if (is_j1mini) {
++		pin = ioremap(SPRD_PIN_PHYS, 0x10);
++		apb_base = ioremap(AP_APB_PHYS, 0x100);
++	}
++
++	if (!aon || !ahb || !apb || !usb || (is_j1mini && (!pin || !apb_base))) {
+ 		pr_err("sprd-usb: ioremap failed\n");
+ 		goto out;
+ 	}
+@@ -103,27 +127,56 @@ static int __init sprd_usb_bringup(void)
+ 		ret = sprd_adi_read(ANA_LDO_PD_CTRL, &pd_new);
+ 	pr_info("sprd-usb: LDO_PD_CTRL %04x -> %04x (%d), LDO_V_CTRL9 %04x\n",
+ 		pd, pd_new, ret, vusb);
+-	mdelay(10);
++	mdelay(20);
+ 
+-	/* 2.-4. PHY power, AHB clock, resets */
++	/* 2. PHY power, AHB clock */
+ 	rmw(aon + AON_APB_PWR_CTRL, AON_USB_PHY_PD, 0);
+ 	rmw(ahb + AP_AHB_EB, 0, AP_AHB_USB_EB);
+-	mdelay(2);
+-	rmw(ahb + AP_AHB_RST, 0, AP_AHB_USB_RSTS);
+-	mdelay(5);
+-	rmw(ahb + AP_AHB_RST, AP_AHB_USB_RSTS, 0);
+-	mdelay(3);
+-
+-	/* 5. PHY control and tune */
+-	rmw(apb + 8, 0, AP_APB_PHY_CTRL_BIT9);
+-		if (of_machine_is_compatible("samsung,j1mini3g") || of_machine_is_compatible("samsung,j1mini"))
+-		writel(J1MINI_PHY_TUNE, apb);
+-	else
++	mdelay(10);
++
++	if (is_j1mini) {
++		/*
++		 * J1 Mini (chip_x20) bringup following vendor usb_hw.c:
++		 * Pulse AHB reset bits 5 & 6
++		 */
++		rmw(ahb + AP_AHB_RST, 0, BIT(5) | BIT(6));
++		mdelay(10);
++		rmw(ahb + AP_AHB_RST, BIT(5) | BIT(6), 0);
++
++		/* Set GUSBCFG bit 3: 16-bit UTMI+ PHY width */
++		rmw(usb + DWC2_GUSBCFG, 0, BIT(3));
++
++		/* Reset PHY: utmi_PORN (PIN_BASE bit 0) & utmi_rst (AHB_RST bit 7) */
++		rmw(pin + REG_PIN_CTRL0, PIN_UTMI_PORN, 0);
++		rmw(ahb + AP_AHB_RST, 0, BIT(7));
++		mdelay(10);
++		rmw(pin + REG_PIN_CTRL0, 0, PIN_UTMI_PORN);
++		rmw(ahb + AP_AHB_RST, BIT(7), 0);
++		mdelay(10);
++
++		/* Write PHY tuning registers REG_AP_APB_USB_CTRL0 and CTRL1 */
++		writel(J1MINI_PHY_TUNE_CTRL0, apb_base + REG_AP_APB_USB_CTRL0);
++		writel(J1MINI_PHY_TUNE_CTRL1, apb_base + REG_AP_APB_USB_CTRL1);
++		pr_info("sprd-usb: j1mini CTRL0 %08x CTRL1 %08x GUSBCFG %08x PIN_CTRL0 %08x\n",
++			readl(apb_base + REG_AP_APB_USB_CTRL0),
++			readl(apb_base + REG_AP_APB_USB_CTRL1),
++			readl(usb + DWC2_GUSBCFG),
++			readl(pin + REG_PIN_CTRL0));
++	} else {
++		/* gtelwifi: pulse USB, UTMI and PHY soft resets */
++		rmw(ahb + AP_AHB_RST, 0, AP_AHB_USB_RSTS);
++		mdelay(5);
++		rmw(ahb + AP_AHB_RST, AP_AHB_USB_RSTS, 0);
++		mdelay(3);
++
++		/* PHY control and tune */
++		rmw(apb + 8, 0, AP_APB_PHY_CTRL_BIT9);
+ 		writel(GTELWIFI_PHY_TUNE, apb);
++	}
+ 
+-	pr_info("sprd-usb: after: PWR_CTRL %08x AHB_EB %08x PHY_CTRL %08x TUNE %08x GSNPSID %08x\n",
++	pr_info("sprd-usb: after: PWR_CTRL %08x AHB_EB %08x GSNPSID %08x\n",
+ 		readl(aon + AON_APB_PWR_CTRL), readl(ahb + AP_AHB_EB),
+-		readl(apb + 8), readl(apb), readl(usb + DWC2_GSNPSID));
++		readl(usb + DWC2_GSNPSID));
+ 
+ 	/* Reset values = what the core was synthesized with (FIFO maxima) */
+ 	pr_info("sprd-usb: GHWCFG1-4 %08x %08x %08x %08x GRXFSIZ %08x GNPTXFSIZ %08x\n",
+@@ -140,6 +193,10 @@ static int __init sprd_usb_bringup(void)
+ 		pr_info("sprd-usb: DPTXFSIZ1-15 depth:%s\n", buf);
+ 	}
+ out:
++	if (apb_base)
++		iounmap(apb_base);
++	if (pin)
++		iounmap(pin);
+ 	if (usb)
+ 		iounmap(usb);
+ 	if (apb)
+diff --git a/drivers/usb/dwc2/core.c b/drivers/usb/dwc2/core.c
+index f375c5185..07e7dc4cd 100644
+--- a/drivers/usb/dwc2/core.c
++++ b/drivers/usb/dwc2/core.c
+@@ -1157,7 +1157,7 @@ static void dwc2_set_turnaround_time(struct dwc2_hsotg *hsotg)
+ 
+ 	usbcfg &= ~GUSBCFG_USBTRDTIM_MASK;
+ 	if (hsotg->params.phy_utmi_width == 16)
+-		usbcfg |= 5 << GUSBCFG_USBTRDTIM_SHIFT;
++		usbcfg |= 6 << GUSBCFG_USBTRDTIM_SHIFT;
+ 	else
+ 		usbcfg |= 9 << GUSBCFG_USBTRDTIM_SHIFT;
+ 
+diff --git a/drivers/usb/dwc2/core.h b/drivers/usb/dwc2/core.h
+index 8d69b184c..fc5cca82b 100644
+--- a/drivers/usb/dwc2/core.h
++++ b/drivers/usb/dwc2/core.h
+@@ -664,7 +664,7 @@ struct dwc2_hw_params {
+ };
+ 
+ /* Size of control and EP0 buffers */
+-#define DWC2_CTRL_BUFF_SIZE 8
++#define DWC2_CTRL_BUFF_SIZE 512
+ 
+ /**
+  * struct dwc2_gregs_backup - Holds global registers state before
+diff --git a/drivers/usb/dwc2/gadget.c b/drivers/usb/dwc2/gadget.c
+index aec074206..0eec513fe 100644
+--- a/drivers/usb/dwc2/gadget.c
++++ b/drivers/usb/dwc2/gadget.c
+@@ -32,6 +32,7 @@
+ 
+ #include "core.h"
+ #include "hw.h"
++static void kill_all_requests(struct dwc2_hsotg *hsotg, struct dwc2_hsotg_ep *ep, int result);
+ 
+ static bool stay_awake_connected = true;
+ /* The one gadget on this SoC; lets a write of 0 drop a held wakeup source */
+@@ -488,7 +489,7 @@ static int dwc2_gadget_alloc_ctrl_desc_chains(struct dwc2_hsotg *hsotg)
+ {
+ 	hsotg->setup_desc[0] =
+ 		dmam_alloc_coherent(hsotg->dev,
+-				    sizeof(struct dwc2_dma_desc),
++				    512,
+ 				    &hsotg->setup_desc_dma[0],
+ 				    GFP_KERNEL);
+ 	if (!hsotg->setup_desc[0])
+@@ -496,7 +497,7 @@ static int dwc2_gadget_alloc_ctrl_desc_chains(struct dwc2_hsotg *hsotg)
+ 
+ 	hsotg->setup_desc[1] =
+ 		dmam_alloc_coherent(hsotg->dev,
+-				    sizeof(struct dwc2_dma_desc),
++				    512,
+ 				    &hsotg->setup_desc_dma[1],
+ 				    GFP_KERNEL);
+ 	if (!hsotg->setup_desc[1])
+@@ -504,7 +505,7 @@ static int dwc2_gadget_alloc_ctrl_desc_chains(struct dwc2_hsotg *hsotg)
+ 
+ 	hsotg->ctrl_in_desc =
+ 		dmam_alloc_coherent(hsotg->dev,
+-				    sizeof(struct dwc2_dma_desc),
++				    512,
+ 				    &hsotg->ctrl_in_desc_dma,
+ 				    GFP_KERNEL);
+ 	if (!hsotg->ctrl_in_desc)
+@@ -512,7 +513,7 @@ static int dwc2_gadget_alloc_ctrl_desc_chains(struct dwc2_hsotg *hsotg)
+ 
+ 	hsotg->ctrl_out_desc =
+ 		dmam_alloc_coherent(hsotg->dev,
+-				    sizeof(struct dwc2_dma_desc),
++				    512,
+ 				    &hsotg->ctrl_out_desc_dma,
+ 				    GFP_KERNEL);
+ 	if (!hsotg->ctrl_out_desc)
+@@ -1179,6 +1180,8 @@ static void dwc2_hsotg_start_req(struct dwc2_hsotg *hsotg,
+ 
+ 	epsize |= DXEPTSIZ_PKTCNT(packets);
+ 	epsize |= DXEPTSIZ_XFERSIZE(length);
++	if (!dir_in && index == 0)
++		epsize |= DOEPTSIZ0_SUPCNT(3);
+ 
+ 	dev_dbg(hsotg->dev, "%s: %d@%d/%d, 0x%08x => 0x%08x\n",
+ 		__func__, packets, length, ureq->length, epsize, epsize_reg);
+@@ -1244,6 +1247,11 @@ static void dwc2_hsotg_start_req(struct dwc2_hsotg *hsotg,
+ 		}
+ 	}
+ 
++	if (index == 0) {
++		ctrl &= ~DXEPCTL_STALL;
++		pr_info("DWC2: ep0 %s start: len=%d dma=%pad epsize=%08x\n",
++			dir_in ? "IN" : "OUT", length, &ureq->dma, epsize);
++	}
+ 	ctrl |= DXEPCTL_EPENA;	/* ensure ep enabled */
+ 
+ 	dev_dbg(hsotg->dev, "ep0 state:%d\n", hsotg->ep0_state);
+@@ -1936,7 +1944,7 @@ static void dwc2_hsotg_stall_ep0(struct dwc2_hsotg *hsotg)
+ 	u32 reg;
+ 	u32 ctrl;
+ 
+-	dev_dbg(hsotg->dev, "ep0 stall (dir=%d)\n", ep0->dir_in);
++	pr_err("DWC2: STALL EP0 (dir=%d state=%d)\n", ep0->dir_in, hsotg->ep0_state);
+ 	reg = (ep0->dir_in) ? DIEPCTL0 : DOEPCTL0;
+ 
+ 	/*
+@@ -1976,6 +1984,11 @@ static void dwc2_hsotg_process_control(struct dwc2_hsotg *hsotg,
+ 	int ret = 0;
+ 	u32 dcfg;
+ 
++	/* USB 2.0 Spec 8.5.3: SETUP cancels and aborts any prior control transfer */
++	kill_all_requests(hsotg, ep0, -ECONNRESET);
++	if (hsotg->eps_in[0])
++		kill_all_requests(hsotg, hsotg->eps_in[0], -ECONNRESET);
++
+ 	dev_dbg(hsotg->dev,
+ 		"ctrl Type=%02x, Req=%02x, V=%04x, I=%04x, L=%04x\n",
+ 		ctrl->bRequestType, ctrl->bRequest, ctrl->wValue,
+@@ -2026,7 +2039,8 @@ static void dwc2_hsotg_process_control(struct dwc2_hsotg *hsotg,
+ 		ret = hsotg->driver->setup(&hsotg->gadget, ctrl);
+ 		spin_lock(&hsotg->lock);
+ 		if (ret < 0)
+-			dev_dbg(hsotg->dev, "driver->setup() ret %d\n", ret);
++			pr_err("DWC2: setup failed ret=%d (req=%02x type=%02x val=%04x len=%04x)\n",
++			       ret, ctrl->bRequest, ctrl->bRequestType, ctrl->wValue, ctrl->wLength);
+ 	}
+ 
+ 	hsotg->delayed_status = false;
+@@ -2085,7 +2099,7 @@ static void dwc2_hsotg_enqueue_setup(struct dwc2_hsotg *hsotg)
+ 	dev_dbg(hsotg->dev, "%s: queueing setup request\n", __func__);
+ 
+ 	req->zero = 0;
+-	req->length = 8;
++	req->length = using_desc_dma(hsotg) ? 64 : 8;
+ 	req->buf = hsotg->ctrl_buff;
+ 	req->complete = dwc2_hsotg_complete_setup;
+ 
+@@ -2122,10 +2136,9 @@ static void dwc2_hsotg_program_zlp(struct dwc2_hsotg *hsotg,
+ 	else
+ 		dev_dbg(hsotg->dev, "Receiving zero-length packet on ep%d\n",
+ 			index);
++
+ 	if (using_desc_dma(hsotg)) {
+-		/* Not specific buffer needed for ep0 ZLP */
+ 		dma_addr_t dma = hs_ep->desc_list_dma;
+-
+ 		if (!index)
+ 			dwc2_gadget_set_ep0_desc_chain(hsotg, hs_ep);
+ 
+@@ -2135,7 +2148,6 @@ static void dwc2_hsotg_program_zlp(struct dwc2_hsotg *hsotg,
+ 			    DXEPTSIZ_XFERSIZE(0),
+ 			    epsiz_reg);
+ 	}
+-
+ 	ctrl = dwc2_readl(hsotg, epctl_reg);
+ 	ctrl |= DXEPCTL_CNAK;  /* clear NAK set by core */
+ 	ctrl |= DXEPCTL_EPENA; /* ensure ep enabled */
+@@ -3154,7 +3166,7 @@ static void dwc2_hsotg_epint(struct dwc2_hsotg *hsotg, unsigned int idx,
+ 		dwc2_gadget_handle_nak(hs_ep);
+ 
+ 	if (ints & DXEPINT_AHBERR)
+-		dev_dbg(hsotg->dev, "%s: AHBErr\n", __func__);
++		pr_err("DWC2: AHBErr on ep%d(%s)!\n", idx, dir_in ? "in" : "out");
+ 
+ 	if (ints & DXEPINT_SETUP) {  /* Setup or Timeout */
+ 		dev_dbg(hsotg->dev, "%s: Setup/Timeout\n",  __func__);
+@@ -3307,7 +3319,14 @@ static void dwc2_hsotg_irq_enumdone(struct dwc2_hsotg *hsotg)
+ 	}
+ 
+ 	/* ensure after enumeration our EP0 is active */
+-
++	dwc2_set_bit(hsotg, DCTL, DCTL_CGNPINNAK);
++	if (hsotg->params.phy_type == DWC2_PHY_TYPE_PARAM_UTMI &&
++	    hsotg->params.phy_utmi_width == 16) {
++		u32 gusbcfg = dwc2_readl(hsotg, GUSBCFG);
++		gusbcfg &= ~GUSBCFG_USBTRDTIM_MASK;
++		gusbcfg |= 6 << GUSBCFG_USBTRDTIM_SHIFT;
++		dwc2_writel(hsotg, gusbcfg, GUSBCFG);
++	}
+ 	dwc2_hsotg_enqueue_setup(hsotg);
+ 
+ 	dev_dbg(hsotg->dev, "EP0: DIEPCTL0=0x%08x, DOEPCTL0=0x%08x\n",
+@@ -3432,8 +3451,20 @@ void dwc2_hsotg_core_init_disconnected(struct dwc2_hsotg *hsotg,
+ 	u32 dcfg = 0;
+ 	int ep;
+ 
+-	/* Kill any ep0 requests as controller will be reinitialized */
+-	kill_all_requests(hsotg, hsotg->eps_out[0], -ECONNRESET);
++	/* Reset EP0 state machine and direction */
++	hsotg->ep0_state = DWC2_EP0_SETUP;
++	if (hsotg->eps_out[0]) {
++		hsotg->eps_out[0]->dir_in = 0;
++		hsotg->eps_out[0]->send_zlp = 0;
++		kill_all_requests(hsotg, hsotg->eps_out[0], -ECONNRESET);
++	}
++	if (hsotg->eps_in[0]) {
++		hsotg->eps_in[0]->dir_in = 1;
++		hsotg->eps_in[0]->send_zlp = 0;
++		kill_all_requests(hsotg, hsotg->eps_in[0], -ECONNRESET);
++	}
++	dwc2_writel(hsotg, 0xffffffff, DOEPINT(0));
++	dwc2_writel(hsotg, 0xffffffff, DIEPINT(0));
+ 
+ 	if (!is_usb_reset) {
+ 		if (dwc2_core_reset(hsotg, true))
+@@ -3597,7 +3628,7 @@ void dwc2_hsotg_core_init_disconnected(struct dwc2_hsotg *hsotg,
+ 
+ 	/* set to read 1 8byte packet */
+ 	dwc2_writel(hsotg, DXEPTSIZ_MC(1) | DXEPTSIZ_PKTCNT(1) |
+-	       DXEPTSIZ_XFERSIZE(8), DOEPTSIZ0);
++	       DXEPTSIZ_XFERSIZE(8) | DOEPTSIZ0_SUPCNT(3), DOEPTSIZ0);
+ 
+ 	dwc2_writel(hsotg, dwc2_hsotg_ep0_mps(hsotg->eps_out[0]->ep.maxpacket) |
+ 	       DXEPCTL_CNAK | DXEPCTL_EPENA |
+@@ -3641,9 +3672,10 @@ void dwc2_hsotg_core_disconnect(struct dwc2_hsotg *hsotg)
+ 
+ void dwc2_hsotg_core_connect(struct dwc2_hsotg *hsotg)
+ {
+-	/* remove the soft-disconnect and let's go */
+-	if (!hsotg->role_sw || (dwc2_readl(hsotg, GOTGCTL) & GOTGCTL_BSESVLD))
+-		dwc2_clear_bit(hsotg, DCTL, DCTL_SFTDISCON);
++	/* Assert soft-disconnect for 200ms to guarantee host detects SE0 disconnect */
++	dwc2_set_bit(hsotg, DCTL, DCTL_SFTDISCON);
++	mdelay(200);
++	dwc2_clear_bit(hsotg, DCTL, DCTL_SFTDISCON);
+ }
+ 
+ /**
+@@ -3801,6 +3833,20 @@ static irqreturn_t dwc2_hsotg_irq(int irq, void *pw)
+ 		/* Reset device address to zero */
+ 		dwc2_clear_bit(hsotg, DCFG, DCFG_DEVADDR_MASK);
+ 
++		hsotg->ep0_state = DWC2_EP0_SETUP;
++		if (hsotg->eps_out[0]) {
++			hsotg->eps_out[0]->dir_in = 0;
++			hsotg->eps_out[0]->send_zlp = 0;
++			kill_all_requests(hsotg, hsotg->eps_out[0], -ECONNRESET);
++		}
++		if (hsotg->eps_in[0]) {
++			hsotg->eps_in[0]->dir_in = 1;
++			hsotg->eps_in[0]->send_zlp = 0;
++			kill_all_requests(hsotg, hsotg->eps_in[0], -ECONNRESET);
++		}
++		dwc2_writel(hsotg, 0xffffffff, DOEPINT(0));
++		dwc2_writel(hsotg, 0xffffffff, DIEPINT(0));
++
+ 		if (usb_status & GOTGCTL_BSESVLD && connected)
+ 			dwc2_hsotg_core_init_disconnected(hsotg, true);
+ 	}
+diff --git a/drivers/usb/dwc2/params.c b/drivers/usb/dwc2/params.c
+index 091bfcfef..edcd41bf6 100644
+--- a/drivers/usb/dwc2/params.c
++++ b/drivers/usb/dwc2/params.c
+@@ -532,7 +532,7 @@ static void dwc2_set_default_params(struct dwc2_hsotg *hsotg)
+ 	p->service_interval = false;
+ 	p->max_packet_count = hw->max_packet_count;
+ 	p->max_transfer_size = hw->max_transfer_size;
+-	p->ahbcfg = GAHBCFG_HBSTLEN_INCR << GAHBCFG_HBSTLEN_SHIFT;
++	p->ahbcfg = GAHBCFG_HBSTLEN_INCR4 << GAHBCFG_HBSTLEN_SHIFT;
+ 	p->ref_clk_per = 33333;
+ 	p->sof_cnt_wkup_alert = 100;
+ 
+-- 
+2.47.3
+

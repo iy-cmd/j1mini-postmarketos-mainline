@@ -1,0 +1,396 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Samsung Galaxy J1 mini 3G (SM-J105H / SM-J105F, "j1mini3g")
+ *
+ * SoC: Spreadtrum SC8830A / SC7731 (4x Cortex-A7, Mali-400 MP2, PMIC SC2723)
+ * RAM: 768 MiB (SM-J105H rev00-02) / 1024 MiB (rev03 / SM-J105F)
+ * Display: 4.0" 480x800 WVGA MIPI DSI video mode (Samsung S6D77A1 or Himax HX8369B)
+ * Touchscreen: FocalTech FT6206 (I2C1 @ 0x38, IRQ GPIO 232)
+ * Accelerometer: Bosch BMA250E (I2C2 @ 0x18, IRQ GPIO 238)
+ * Storage: eMMC (sdio1), microSD (sdio0)
+ * Modem: Spreadtrum SC8830 3G baseband with SIPC
+ *
+ * Inherits the SC7730/SC8830 mainline support from gtelwifi-mainline.
+ */
+
+/dts-v1/;
+
+#include "sc7730.dtsi"
+#include "sc7730-modem.dtsi"
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+
+/ {
+	model = "Samsung Galaxy J1 mini (SM-J105H/F, j1mini3g)";
+	compatible = "samsung,j1mini3g", "samsung,j1mini", "sprd,sc8830", "sprd,sc7730";
+
+	/*
+	 * Board IDs matched by Spreadtrum bootloader against dt.img QCDT.
+	 * Revisions 0-3 cover all known J1 mini hardware board revisions.
+	 */
+	sprd,sc-id = <8830 0 0x20000>,
+		     <8830 1 0x20000>,
+		     <8830 2 0x20000>,
+		     <8830 3 0x20000>;
+
+	aliases {
+		serial1 = &uart1;
+		mmc0 = &emmc;
+		mmc1 = &sdio0;
+		mmc2 = &sdio1;
+	};
+
+	chosen {
+		bootargs = "";
+	};
+
+	/*
+	 * RAM: 768 MiB default (rev 00-02), bootloader can update size.
+	 */
+	memory@80000000 {
+		device_type = "memory";
+		reg = <0x80000000 0x30000000>;
+	};
+
+	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		/* Shared memory between AP and CP (modem) */
+		smem@87800000 {
+			reg = <0x87800000 0x200000>;
+			no-map;
+		};
+
+		/* 28 MiB CP modem memory as defined in vendor J1 mini DT */
+		cp-modem@88000000 {
+			reg = <0x88000000 0x1c00000>;
+			no-map;
+		};
+
+		/* WCN modem carveout (2M+4K) */
+		cp-wcn@8a800000 {
+			reg = <0x8a800000 0x201000>;
+			no-map;
+		};
+
+		/*
+		 * Kernel crash log survives warm reboot in RAM.
+		 * Placed at 0x8fe00000 (1 MiB), safely inside unused RAM.
+		 */
+		ramoops@8fe00000 {
+			compatible = "ramoops";
+			reg = <0x8fe00000 0x100000>;
+			record-size = <0x40000>;
+			console-size = <0x40000>;
+			pmsg-size = <0x20000>;
+		};
+
+		/* Samsung bootloader sec_log region (preserves log for last_kmsg) */
+		sec_log@86b00000 {
+			reg = <0x86b00000 0x100000>;
+			no-map;
+		};
+
+		/*
+		 * Vendor bootloader framebuffer scan-out buffer:
+		 * 480 * 800 * 4 = 0x177000 bytes at 0x9F197000 (confirmed by sboot log).
+		 */
+		framebuffer@9f197000 {
+			reg = <0x9f197000 0x180000>;
+			no-map;
+		};
+
+		/*
+		 * Scan-out and GPU DMA buffers for DISPC.
+		 * 32 MiB CMA pool sized for 768 MiB total RAM.
+		 */
+		linux,cma {
+			compatible = "shared-dma-pool";
+			reusable;
+			size = <0x2000000>;
+			alloc-ranges = <0x90000000 0x8000000>;
+			linux,cma-default;
+		};
+	};
+
+	/*
+	 * Fallback scan-out buffer left scanning out by sboot.
+	 * 480x800, 32bpp (ARGB/XRGB), stride 1920 (480*4).
+	 */
+	framebuffer: framebuffer@9f197000 {
+		compatible = "simple-framebuffer";
+		reg = <0x9f197000 (480 * 800 * 4)>;
+		width = <480>;
+		height = <800>;
+		stride = <(480 * 4)>;
+		format = "x8r8g8b8";
+	};
+
+	/* SC2723 LDO_SDCORE: microSD VDD and SD0 pads (3 V mode) */
+	vddsdcore: regulator-vddsdcore {
+		compatible = "regulator-fixed";
+		regulator-name = "vddsdcore";
+		regulator-min-microvolt = <3000000>;
+		regulator-max-microvolt = <3000000>;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+
+	/* SC2723 LDO vddsim2: Touchscreen 3.0 V supply */
+	vddsim2: regulator-vddsim2 {
+		compatible = "regulator-fixed";
+		regulator-name = "vddsim2";
+		regulator-min-microvolt = <3000000>;
+		regulator-max-microvolt = <3000000>;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+
+	/* SC2723 LDO vddusb: USB 3.3 V supply */
+	vddusb: regulator-vddusb {
+		compatible = "regulator-fixed";
+		regulator-name = "vddusb";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+
+	/*
+	 * Audio card: VBC r2p0 + AP DMA + SC2723 PMIC analog codec
+	 * (mono speaker, stereo headphones, internal microphone, jack detect on pmic_eic 8).
+	 */
+	sound {
+		compatible = "simple-audio-card";
+		simple-audio-card,name = "j1mini";
+		simple-audio-card,widgets = "Speaker", "Speaker",
+					    "Headphone", "Headphones",
+					    "Microphone", "Internal Mic";
+		simple-audio-card,routing = "Speaker", "SPK",
+					    "Headphones", "HPOL",
+					    "Headphones", "HPOR",
+					    "MIC", "Internal Mic";
+		simple-audio-card,pin-switches = "Speaker", "Headphones";
+		simple-audio-card,hp-det-gpios = <&pmic_eic 8 GPIO_ACTIVE_HIGH>;
+
+		simple-audio-card,cpu {
+			sound-dai = <&vbc>;
+		};
+
+		simple-audio-card,plat {
+			sound-dai = <&audio_pcm>;
+		};
+
+		simple-audio-card,codec {
+			sound-dai = <&sc2723_codec>;
+		};
+	};
+
+	/*
+	 * Power (PBINT) and Volume Down (EXT_RSTN) are PMIC inputs, not part
+	 * of the keypad matrix. Power + Volume Down held for ~7-10 s is a
+	 * hardware reset in the PMIC, independent of the kernel.
+	 */
+	gpio-keys {
+		compatible = "gpio-keys";
+
+		key-power {
+			label = "Power";
+			gpios = <&pmic_eic 2 GPIO_ACTIVE_HIGH>;
+			linux,code = <KEY_POWER>;
+			debounce-interval = <50>;
+			wakeup-source;
+		};
+
+		key-volume-down {
+			label = "Volume Down";
+			gpios = <&pmic_eic 10 GPIO_ACTIVE_HIGH>;
+			linux,code = <KEY_VOLUMEDOWN>;
+			debounce-interval = <50>;
+		};
+	};
+};
+
+/*
+ * Hardware DISPC takeover: provides hardware VSYNC and double-buffered DMA
+ * page flips for Mali-400 (Lima) scanout. Panel power-off stays inactive
+ * because panel-power GPIOs / DSI regs are omitted for the S6D77A1 panel.
+ */
+&dispc {
+	width-mm = <52>;
+	height-mm = <86>;
+	status = "okay";
+};
+
+&gpu {
+	interrupts = <GIC_SPI 39 IRQ_TYPE_LEVEL_HIGH>,
+		     <GIC_SPI 39 IRQ_TYPE_LEVEL_HIGH>,
+		     <GIC_SPI 39 IRQ_TYPE_LEVEL_HIGH>,
+		     <GIC_SPI 39 IRQ_TYPE_LEVEL_HIGH>,
+		     <GIC_SPI 39 IRQ_TYPE_LEVEL_HIGH>;
+	interrupt-names = "gp", "gpmmu", "pp0", "ppmmu0", "pmu";
+	status = "okay";
+};
+
+&ap_dma {
+	status = "okay";
+};
+
+&vbc {
+	status = "okay";
+};
+
+&audio_pcm {
+	status = "okay";
+};
+
+&sc2723_codec {
+	status = "okay";
+};
+
+/* eMMC internal storage (sdio@20600000) */
+&emmc {
+	bus-width = <8>;
+	non-removable;
+	no-sd;
+	no-sdio;
+	no-1-8-v;
+	cap-mmc-highspeed;
+	mmc-ddr-3_3v;
+	max-frequency = <52000000>;
+	sprd,write-delay = <0x1b>;
+	sprd,read-pos-delay = <0x0c>;
+	sprd,read-neg-delay = <0x0c>;
+	status = "okay";
+};
+
+/* MicroSD slot (sdio@20300000) */
+&sdio0 {
+	bus-width = <4>;
+	cd-gpios = <&gpio 71 GPIO_ACTIVE_LOW>;
+	cd-debounce-delay-ms = <200>;
+	disable-wp;
+	cap-sd-highspeed;
+	max-frequency = <50000000>;
+	no-1-8-v;
+	sdhci-caps-mask = <0x0 0x05000000>;
+	vmmc-supply = <&vddsdcore>;
+	status = "okay";
+};
+
+/* WLAN SDIO slot (sdio@20400000) */
+&sdio1 {
+	status = "okay";
+};
+
+/* USB OTG / Device mode controller (dwc2) */
+&usb {
+	dr_mode = "peripheral";
+	role-switch-default-mode = "peripheral";
+	g-np-tx-fifo-size = <0x40>;
+	vusb_a-supply = <&vddusb>;
+	status = "okay";
+};
+
+/*
+ * I2C1: Touchscreen controller
+ * Second-source hardware: either FocalTech FT6206 / FT6236 @ 0x38
+ * or MELFAS MCS8040L (mip4_ts) @ 0x48.
+ */
+&i2c1 {
+	clock-frequency = <100000>;
+	pull_up_mode = <1>;
+	status = "okay";
+
+	touchscreen@38 {
+		compatible = "focaltech,ft6x06_ts", "focaltech,ft6206", "focaltech,ft6236", "edt,edt-ft5306";
+		reg = <0x38>;
+		interrupt-parent = <&gpio>;
+		interrupts = <232 IRQ_TYPE_EDGE_FALLING>;
+		touchscreen-size-x = <480>;
+		touchscreen-size-y = <800>;
+		vcc-supply = <&vddsim2>;
+		iovcc-supply = <&vddsim2>;
+		/* Disabled: this J1 Mini hw_rev=2 unit uses Melfas MIP4 @ 0x48 on GPIO 232 */
+		status = "disabled";
+	};
+
+	touchscreen@48 {
+		compatible = "melfas,mip4_ts";
+		reg = <0x48>;
+		interrupt-parent = <&gpio>;
+		interrupts = <232 IRQ_TYPE_EDGE_FALLING>;
+		touchscreen-size-x = <480>;
+		touchscreen-size-y = <800>;
+		vcc-supply = <&vddsim2>;
+		linux,keycodes = <KEY_APPSELECT KEY_BACK>;
+		status = "okay";
+	};
+};
+
+/*
+ * I2C2: Sensors
+ * Accelerometer Bosch BMA250E (bma2x2)
+ */
+&i2c2 {
+	status = "okay";
+
+	accelerometer@18 {
+		compatible = "bosch,bma250e", "bosch,bma222e";
+		reg = <0x18>;
+		interrupt-parent = <&gpio>;
+		interrupts = <238 IRQ_TYPE_EDGE_RISING>;
+	};
+};
+
+/*
+ * Hardware Keypad (Volume Up, Home)
+ */
+&keypad {
+	keypad,num-rows = <1>;
+	keypad,num-columns = <3>;
+	linux,keymap = <MATRIX_KEY(0, 0, KEY_VOLUMEUP)
+			MATRIX_KEY(0, 1, KEY_HOMEPAGE)
+			MATRIX_KEY(0, 2, KEY_VOLUMEUP)>;
+	wakeup-source;
+	status = "okay";
+};
+
+/* Modem IPC channels */
+&sipc {
+	status = "okay";
+};
+
+&scproc_cpw {
+	status = "okay";
+	reg = <0x88000000 0x1c00000>,
+	      <0x50000000 0xc>,
+	      <0x402b0000 0x10000>;
+
+	modem {
+		reg = <0x88300000 0xc00000>;
+	};
+};
+
+/ {
+	spipe-cpw { status = "okay"; };
+	slog-cpw { status = "okay"; };
+	stty-cpw { status = "okay"; };
+	seth0-cpw { status = "okay"; };
+	seth1-cpw { status = "okay"; };
+	seth2-cpw { status = "okay"; };
+};
+
+/*
+ * Disable cpufreq OPP table for now: SC8830 clock scaling & regulator
+ * differ from SC7730SE and cause schedutil to spam transition errors.
+ */
+&cpu0 { /delete-property/ operating-points-v2; };
+&cpu1 { /delete-property/ operating-points-v2; };
+&cpu2 { /delete-property/ operating-points-v2; };
+&cpu3 { /delete-property/ operating-points-v2; };
+/delete-node/ &cpu_opp;
+

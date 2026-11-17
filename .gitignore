@@ -1,0 +1,15 @@
+# Build outputs & large binary images (published via GitHub Releases instead of Git)
+build/
+binaries/
+out_build/
+out_pmos/
+out_release/
+android_kernel_samsung_j1mini3g-*/
+*.img
+*.ext4
+*.tar.md5
+*.tar.gz
+*.tar.zst
+*.zip
+*.log
+.DS_Store
