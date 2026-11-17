@@ -1,0 +1,12 @@
+#!/bin/sh
+amixer -c 0 sset "DAC" 7,7 >/dev/null 2>&1 || true
+amixer -c 0 sset "Speaker" 10 on >/dev/null 2>&1 || true
+amixer -c 0 sset "SPKL Mixer DACL" on >/dev/null 2>&1 || true
+amixer -c 0 sset "SPKL Mixer DACR" on >/dev/null 2>&1 || true
+amixer -c 0 sset "Headphone" 12,12 >/dev/null 2>&1 || true
+amixer -c 0 sset "Headphones" off >/dev/null 2>&1 || true
+amixer -c 0 sset "Mic Boost" 2 >/dev/null 2>&1 || true
+amixer -c 0 sset "ADC" 24,24 >/dev/null 2>&1 || true
+amixer -c 0 sset "ADC Digital" 32,32 >/dev/null 2>&1 || true
+amixer -c 0 sset "ADCL Mixer MIC" on >/dev/null 2>&1 || true
+amixer -c 0 sset "ADCR Mixer MIC" on >/dev/null 2>&1 || true
