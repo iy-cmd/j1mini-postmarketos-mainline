@@ -22,8 +22,9 @@ Features hardware-accelerated Mali-400 graphics (Lima) with tear-free VSync comp
 | **USB Gadget (Network + Serial)** | Working | `CDC-NCM` Ethernet (`192.168.7.2`) + `CDC-ACM` serial console (`/dev/ttyACM0`), DWC2 PIO mode |
 | **USB Internet Sharing** | Working | Auto-configured NAT + DNS + `TTL=66` (works even behind carrier hotspot tether checks) |
 | **PMIC / Battery / Fuel Gauge** | Working | SC2723 PMIC regulators, EIC, ADC, FGU |
-| **Wi-Fi (`Spreadtrum SC2331 / Marlin 1`)** | Not supported | SDIO `0000:2331` — no mainline Linux driver & requires proprietary Android blobs |
-| **Cellular Modem / Bluetooth** | Not supported | Proprietary Spreadtrum CP / WCN firmware stack |
+| **Wi-Fi (`Spreadtrum SC2331 / Marlin 1`)** | In Progress | SDIO `0000:2331` — driver & firmware bring-up in progress (use USB internet in the meantime) |
+| **Bluetooth (`Spreadtrum SC2331`)** | In Progress | WCN combo chip bring-up in progress alongside Wi-Fi |
+| **Cellular Modem** | Not supported | Proprietary Spreadtrum CP firmware stack |
 
 ---
 
@@ -89,7 +90,7 @@ Once postmarketOS is running and connected over USB (`192.168.7.2`), you can fla
 
 ## Default Login & Controls
 
-- **User**: `shatalovie`
+- **User**: `samsungj1mini`
 - **Password**: `1234` (change immediately with `passwd` after first login!)
 - **Desktop**: SXMO (Simple X Mobile) on `i3` + `picom` VSync compositor
 - **Browser**: GNOME Web (`epiphany 50.6`, tuned for 480×800 & Mali-400)
@@ -110,7 +111,7 @@ When connected to a Linux host via USB, the phone exposes two USB gadget functio
 
 ```bash
 sudo ./scripts/setup_host_network.sh
-ssh shatalovie@192.168.7.2
+ssh samsungj1mini@192.168.7.2
 ```
 
 ### Automatic USB Internet Sharing (NetworkManager on Linux Host)

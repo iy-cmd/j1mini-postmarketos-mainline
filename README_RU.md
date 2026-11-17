@@ -22,8 +22,9 @@
 | **USB Gadget (Сеть + Serial)** | Работает | `CDC-NCM` Ethernet (`192.168.7.2`) + `CDC-ACM` консоль (`/dev/ttyACM0`), DWC2 PIO |
 | **Интернет по USB** | Работает | Авто-NAT + DNS + `TTL=66` (работает даже при раздаче с мобильных точек доступа) |
 | **PMIC / Батарея / Fuel Gauge** | Работает | Регуляторы SC2723, EIC, ADC, FGU |
-| **Wi-Fi (`Spreadtrum SC2331 / Marlin 1`)** | Не поддерживается | SDIO `0000:2331` — нет mainline-драйвера, требуются закрытые прошивки Android |
-| **Сотовый модем / Bluetooth** | Не поддерживается | Закрытый стек модема Spreadtrum CP / WCN |
+| **Wi-Fi (`Spreadtrum SC2331 / Marlin 1`)** | В разработке (In Progress) | SDIO `0000:2331` — идёт работа над драйвером и прошивкой (пока используйте интернет по USB) |
+| **Bluetooth (`Spreadtrum SC2331`)** | В разработке (In Progress) | Идёт работа над поддержкой комбо-чипа WCN вместе с Wi-Fi |
+| **Сотовый модем** | Не поддерживается | Закрытый стек модема Spreadtrum CP |
 
 ---
 
@@ -89,7 +90,7 @@
 
 ## Вход и управление
 
-- **Логин**: `shatalovie`
+- **Логин**: `samsungj1mini`
 - **Пароль**: `1234` *(рекомендуется сменить командой `passwd` после первого входа)*
 - **Оболочка**: SXMO (Simple X Mobile) на `i3` + VSync-композитор `picom`
 - **Браузер**: GNOME Web (`epiphany 50.6`), настроенный под 480×800 и Mali-400
@@ -110,7 +111,7 @@
 
 ```bash
 sudo ./scripts/setup_host_network.sh
-ssh shatalovie@192.168.7.2
+ssh samsungj1mini@192.168.7.2
 ```
 
 ### Автоматическая раздача интернета с Linux-ПК (NetworkManager)
