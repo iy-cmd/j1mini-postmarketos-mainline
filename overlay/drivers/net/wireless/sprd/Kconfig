@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config WLAN_VENDOR_SPRD
+	bool "Spreadtrum / Unisoc wireless devices"
+	default y
+	help
+	  If you have a Spreadtrum/Unisoc wireless card belonging to this class,
+	  say Y.
+
+if WLAN_VENDOR_SPRD
+
+source "drivers/net/wireless/sprd/sc2331/Kconfig"
+
+endif # WLAN_VENDOR_SPRD

@@ -4,7 +4,7 @@
 
 Полноценный порт **Mainline Linux 7.3.1** и **postmarketOS (Alpine Linux + SXMO i3)** для смартфона **Samsung Galaxy J1 Mini 3G** (`j1mini3g`, `SM-J105H`, `SM-J105F`, Spreadtrum/Unisoc SC7730 / SC8830 / SC7727S).
 
-Включает аппаратное ускорение графики **Mali-400 (Lima)** с плавным VSync-композитингом без артефактов, рабочий звук (динамик, наушники, микрофон) через **PipeWire**, мультитач **MELFAS MIP4**, масштабированный под 480×800 интерфейс **SXMO i3**, лёгкий браузер **GNOME Web** и USB-сеть с раздачей интернета с ПК.
+Включает аппаратное ускорение графики **Mali-400 (Lima)** с плавным VSync-композитингом без артефактов, рабочие **Wi-Fi и Bluetooth (`SC2331` Marlin 1)**, **регулировку яркости (`KTD2801`)**, **акселерометр (`Bosch BMA255`)**, звук (динамик, наушники, микрофон) через **PipeWire**, мультитач **MELFAS MIP4**, масштабированный под 480×800 интерфейс **SXMO i3**, лёгкий браузер **GNOME Web** и USB-сеть с раздачей интернета с ПК.
 
 ---
 
@@ -14,16 +14,19 @@
 |---|---|---|
 | **CPU (4× Cortex-A7)** | Работает | Все 4 ядра активны в SMP (`7.3.1-j1mini+`) |
 | **Дисплей (`S6D77A1` 480×800)** | Работает | Аппаратный контроллер `sprd-dispc` @ 58 Гц, атомарный VSYNC page-flip |
+| **Яркость подсветки (`KTD2801`)** | Работает | Kinetic KTD2801 (ExpressWire, GPIO 214), `/sys/class/backlight/backlight`, `brightnessctl` (0–215) |
 | **GPU (`Mali-400 MP1`)** | Работает | Mainline `lima` (OpenGL 2.1 / GLES 2.0, Mesa 26.2) + Xorg Glamor + `picom` VSync |
 | **Тачскрин (`MELFAS MIP4`)** | Работает | Мультитач по I2C (`0x48`), `libinput`, жесты SXMO |
+| **Акселерометр (`Bosch BMA255`)** | Работает | `bmc150_accel_i2c` (`0x18`), откалиброванная `mount-matrix`, автоповорот через `iio-sensor-proxy` |
+| **Wi-Fi (`Spreadtrum SC2331 / Marlin 1`)** | Работает | Mainline-драйвер (`sc2331_boot` + `sc2331_wlan`): UART0 FDL + SDIO `0000:2331` FW/RF-калибровка, 2.4 ГГц WPA2 (~15 Мбит/с, совместим с iPhone-раздачей) |
+| **Bluetooth (`Spreadtrum SC2331 / Marlin 1`)** | Работает | H4 `serdev`-драйвер (`sc2331_bt`) по UART0 @ 3.25 Мбит/с (мультиплексор 48 МГц), PSKEY `0xFCA0`, BlueZ 4.0 BR/EDR + BLE, одновременная работа с Wi-Fi |
 | **Звук (Динамик, Наушники, Микрофон, Jack)** | Работает | VBC r2p0 + AP DMA + кодек SC2723, профили ALSA UCM2 + **PipeWire / WirePlumber** |
 | **Аппаратные кнопки** | Работает | Power, Home, Громкость +/- (**Громкость Вниз** открывает/закрывает клавиатуру `svkbd`) |
-| **Память (8 ГБ eMMC + microSD)** | Работает | Полный раздел `SYSTEM` 2.1 ГБ (`mmcblk0p25`) + файл подкачки 384 МБ |
+| **Память (8 ГБ eMMC + microSD)** | Работает | Поддерживается полная eMMC (`mmcblk0p27` 4.7 ГБ `/` + `mmcblk0p25` 2.0 ГБ `/home` + swap, либо `mmcblk0p25` 2.1 ГБ `/`) |
 | **USB Gadget (Сеть + Serial)** | Работает | `CDC-NCM` Ethernet (`192.168.7.2`) + `CDC-ACM` консоль (`/dev/ttyACM0`), DWC2 PIO |
 | **Интернет по USB** | Работает | Авто-NAT + DNS + `TTL=66` (работает даже при раздаче с мобильных точек доступа) |
 | **PMIC / Батарея / Fuel Gauge** | Работает | Регуляторы SC2723, EIC, ADC, FGU |
-| **Wi-Fi (`Spreadtrum SC2331 / Marlin 1`)** | В разработке (In Progress) | SDIO `0000:2331` — идёт работа над драйвером и прошивкой (пока используйте интернет по USB) |
-| **Bluetooth (`Spreadtrum SC2331`)** | В разработке (In Progress) | Идёт работа над поддержкой комбо-чипа WCN вместе с Wi-Fi |
+| **Камера** | Пока не работает | В разработке: драйверы DCAM / CSI-2 и сенсоров подключены в DTS и оверлей, но камера пока что не работает |
 | **Сотовый модем** | Не поддерживается | Закрытый стек модема Spreadtrum CP |
 
 ---
@@ -162,6 +165,16 @@ ssh samsungj1mini@192.168.7.2
 3. **Адаптация под 480×800 и лёгкий браузер**:
    - Настроен ровный `96×96 DPI` (`DisplaySize 127 212`), компактные шрифты в `Xresources` / `i3` / `conky` / GTK3 / GTK4, экранная клавиатура `svkbd` (`-g 480x280+0+520`) привязана к кнопке Громкость Вниз.
    - Вместо тяжёлого Firefox установлен **GNOME Web (`epiphany 50.6`)** с оптимальными флагами под Mali-400 OpenGL 2.1 (`GDK_DISABLE=gl,vulkan`, `GSK_RENDERER=cairo`, `WEBKIT_DISABLE_DMABUF_RENDERER=1`, `WEBKIT_DISABLE_COMPOSITING_MODE=1`, `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1`) — вся система с открытым браузером потребляет ~170 МБ ОЗУ.
+4. **Комбо-драйвер Wi-Fi + Bluetooth (`Spreadtrum SC2331` / Marlin 1)**:
+   - Реализован полноценный драйвер для Mainline Linux 7.3 в `overlay/drivers/net/wireless/sprd/sc2331/`: загрузка FDL по UART0 (`sc2331_fdl.bin`), загрузка основной прошивки и RF-калибровки по SDIO (`sc2331_fw.bin`, `connectivity_configure.ini`, `connectivity_calibration.ini`), FullMAC `cfg80211` Wi-Fi (`sc2331_wlan.c`) и H4 `serdev` Bluetooth (`sc2331_bt.c`).
+   - Добавлен драйвер мультиплексора тактирования UART0 48 МГц (`clk-uart.c`) и патч `sprd_serial.c` (`SPRD_BAUD_IO_LIMIT = 3250000`, `DIV_ROUND_CLOSEST`) под скорость Bluetooth Marlin 3.25 Мбит/с, а также тайминги пробуждения `wake_out`/`wake_ack` (`350/200 мс`) для стабильной одновременной работы Wi-Fi и Bluetooth.
+   - При обновлении только ядра поверх существующей системы скопируйте файлы из `firmware/sc2331/*` в `/lib/firmware/sprd/` на телефоне.
+5. **Яркость экрана (`KTD2801`) и акселерометр (`Bosch BMA255`)**:
+   - Включён драйвер `CONFIG_BACKLIGHT_KTD2801` + `CONFIG_LEDS_EXPRESSWIRE` на GPIO 214 (`brightnessctl`, 0–215).
+   - Включён `CONFIG_BMC150_ACCEL_I2C` (`0x18`, `chip_id=0xfa`) с откалиброванной матрицей `mount-matrix` (`-1, 0, 0; 0, 1, 0; 0, 0, -1`) для корректного автоповорота экрана через `iio-sensor-proxy`.
+6. **Камера (В разработке — пока не работает)**:
+   - Добавлены драйверы контроллера захвата DCAM / CSI-2 и сенсора (`sr200pc20m` / `sr030pc50` / `gc0310`) в `overlay/drivers/media/`, настроены регуляторы питания в Device Tree (`vddcama`, `vddcamio`, `vddcammot`, `vddcamd`).
+   - Поддержка камеры находится в разработке, **камера пока что не работает**.
 
 ---
 

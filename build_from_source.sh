@@ -79,7 +79,7 @@ $CONTAINER_BIN run --rm -v "$ROOT:/work:z" -v "$VOLUME_NAME:/src" -w /work/build
     set -e
     export DTB=sc7730-samsung-j1mini.dtb
     export OUT=j1mini-mainline.img
-    export EXTRA_CONFIG=/work/build/buildkit/j1mini.config
+    export EXTRA_CONFIG=/work/source/j1mini.config
     export MKIMAGE=/work/build/tools/mkimage_j1mini.py
     export OVERLAY=/work/overlay
     /work/build/buildkit/build.sh /src/linux

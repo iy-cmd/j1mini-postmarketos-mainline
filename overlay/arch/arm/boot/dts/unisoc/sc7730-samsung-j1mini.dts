@@ -35,6 +35,7 @@
 		     <8830 3 0x20000>;
 
 	aliases {
+		serial0 = &uart0;
 		serial1 = &uart1;
 		mmc0 = &emmc;
 		mmc1 = &sdio0;
@@ -129,6 +130,29 @@
 		format = "x8r8g8b8";
 	};
 
+	/* Kinetic KTD2801 1-wire ExpressWire LCD backlight (GPIO 214) */
+	backlight: backlight {
+		compatible = "kinetic,ktd2801";
+		ctrl-gpios = <&gpio 214 GPIO_ACTIVE_HIGH>;
+		max-brightness = <215>;
+		default-brightness = <100>;
+	};
+
+	/* 48 MHz clock derived from TDPLL/16 (always on, used by UART0 for 3 Mbps BT) */
+	clk_48m: clock-48m {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <48000000>;
+		clock-output-names = "clk-48m";
+	};
+
+	clk_uart0: clock-controller@71200064 {
+		compatible = "sprd,sc7730-uart-clk";
+		reg = <0x71200064 0x4>;
+		clocks = <&ext_26m>, <&clk_48m>;
+		#clock-cells = <0>;
+	};
+
 	/* SC2723 LDO_SDCORE: microSD VDD and SD0 pads (3 V mode) */
 	vddsdcore: regulator-vddsdcore {
 		compatible = "regulator-fixed";
@@ -155,6 +179,81 @@
 		regulator-name = "vddusb";
 		regulator-min-microvolt = <3300000>;
 		regulator-max-microvolt = <3300000>;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+
+	/* SC2723 DCDC vddcon: SC2331 (Marlin) 1.6 V core supply */
+	vddcon: regulator-vddcon {
+		compatible = "sprd,sc2723-ldo";
+		regulator-name = "vddcon";
+		sprd,pd-reg = <0x814 13>;
+		sprd,vsel-reg = <0xa18 0x3ff>;
+		sprd,min-microvolt = <600000>;
+		sprd,step-microvolt = <3125>;
+		regulator-min-microvolt = <1600000>;
+		regulator-max-microvolt = <1600000>;
+	};
+
+	/* SC2723 LDO vddwifipa: SC2331 (Marlin) 3.3 V Wi-Fi PA supply */
+	vddwifipa: regulator-vddwifipa {
+		compatible = "sprd,sc2723-ldo";
+		regulator-name = "vddwifipa";
+		sprd,pd-reg = <0x814 11>;
+		sprd,vsel-reg = <0x818 0xff>;
+		sprd,min-microvolt = <1200000>;
+		sprd,step-microvolt = <10000>;
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+	};
+
+	/* SC2723 camera LDOs: analog 2.8 V and I/O 1.8 V */
+	vddcama: regulator-vddcama {
+		compatible = "sprd,sc2723-ldo";
+		regulator-name = "vddcama";
+		sprd,pd-reg = <0x814 4>;
+		sprd,vsel-reg = <0x830 0xff>;
+		regulator-min-microvolt = <2800000>;
+		regulator-max-microvolt = <2800000>;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+
+	vddcamio: regulator-vddcamio {
+		compatible = "sprd,sc2723-ldo";
+		regulator-name = "vddcamio";
+		sprd,pd-reg = <0x814 6>;
+		sprd,vsel-reg = <0x81c 0x7f00>;
+		sprd,min-microvolt = <1150000>;
+		sprd,step-microvolt = <6250>;
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+
+	/* Camera autofocus / motor 2.8 V */
+	vddcammot: regulator-vddcammot {
+		compatible = "sprd,sc2723-ldo";
+		regulator-name = "vddcammot";
+		sprd,pd-reg = <0x814 7>;
+		sprd,vsel-reg = <0x834 0xff>;
+		regulator-min-microvolt = <2800000>;
+		regulator-max-microvolt = <2800000>;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+
+	/* Camera digital core supply 1.5 V */
+	vddcamd: regulator-vddcamd {
+		compatible = "sprd,sc2723-ldo";
+		regulator-name = "vddcamd";
+		sprd,pd-reg = <0x814 5>;
+		sprd,vsel-reg = <0x81c 0x7f>;
+		sprd,min-microvolt = <1150000>;
+		sprd,step-microvolt = <6250>;
+		regulator-min-microvolt = <1500000>;
+		regulator-max-microvolt = <1500000>;
 		regulator-always-on;
 		regulator-boot-on;
 	};
@@ -281,9 +380,40 @@
 	status = "okay";
 };
 
-/* WLAN SDIO slot (sdio@20400000) */
+/* WLAN SDIO slot (sdio@20400000, SC2331 Marlin 1) */
 &sdio1 {
+	bus-width = <4>;
+	max-frequency = <50000000>;
+	cap-sd-highspeed;
+	no-1-8-v;
+	no-sd;
+	no-mmc;
+	non-removable;
+	keep-power-in-suspend;
+	sprd,write-delay = <0x03>;
+	sprd,read-pos-delay = <0x03>;
+	sprd,read-neg-delay = <0x03>;
 	status = "okay";
+};
+
+/* UART0 connected to SC2331 (Marlin 1) for Stage-1 FDL boot & Bluetooth (3 Mbps @ 48 MHz) */
+&uart0 {
+	clocks = <&ap_apb_gates 13>, <&clk_uart0>, <&clk_48m>;
+	clock-names = "enable", "uart", "source";
+	status = "okay";
+
+	sc2331: wifi-combo {
+		compatible = "sprd,sc2331";
+		vdd-con-supply = <&vddcon>;
+		vdd-pa-supply = <&vddwifipa>;
+		clocks = <&clk_aux0>;
+		clock-names = "lpo";
+		reset-gpios = <&gpio 56 GPIO_ACTIVE_HIGH>;
+		wake-out-gpios = <&gpio 57 GPIO_ACTIVE_HIGH>;
+		data-irq-gpios = <&gpio 58 GPIO_ACTIVE_HIGH>;
+		wake-ack-gpios = <&gpio 59 GPIO_ACTIVE_HIGH>;
+		sprd,sdio-host = <&sdio1>;
+	};
 };
 
 /* USB OTG / Device mode controller (dwc2) */
@@ -293,6 +423,35 @@
 	g-np-tx-fifo-size = <0x40>;
 	vusb_a-supply = <&vddusb>;
 	status = "okay";
+};
+
+/*
+ * Camera I2C bus: I2C0 @ 100 kHz (pull_up_mode 1 for signal stability)
+ * Front camera: SiliconFile SR030PC50 (or GC0310) on D-PHY C (1 lane)
+ */
+&i2c0 {
+	clock-frequency = <100000>;
+	pull_up_mode = <1>;
+	status = "okay";
+
+	camera@30 {
+		compatible = "siliconfile,sr030pc50", "galaxycore,gc0310", "siliconfile,sr200pc20m";
+		reg = <0x30>;
+		clocks = <&dcam>;
+		avdd-supply = <&vddcama>;
+		dovdd-supply = <&vddcamio>;
+		reset-gpios = <&gpio 230 GPIO_ACTIVE_LOW>;
+		powerdown-gpios = <&gpio 187 GPIO_ACTIVE_LOW>;
+		orientation = <0>;
+		rotation = <90>;
+
+		port {
+			front_camera_out: endpoint {
+				remote-endpoint = <&dcam_front_in>;
+				data-lanes = <1>;
+			};
+		};
+	};
 };
 
 /*
@@ -333,16 +492,20 @@
 
 /*
  * I2C2: Sensors
- * Accelerometer Bosch BMA250E (bma2x2)
+ * Accelerometer Bosch BMA254/BMA255 (chip_id=0xfa, bma2x2 accel_place=6)
+ * Linux IIO / iio-sensor-proxy convention: normal portrait = -Y, left-up = +X, face-up = +Z
  */
 &i2c2 {
 	status = "okay";
 
 	accelerometer@18 {
-		compatible = "bosch,bma250e", "bosch,bma222e";
+		compatible = "bosch,bma255", "bosch,bma254", "bosch,bma250e";
 		reg = <0x18>;
 		interrupt-parent = <&gpio>;
 		interrupts = <238 IRQ_TYPE_EDGE_RISING>;
+		mount-matrix = "-1", "0",  "0",
+				"0", "1",  "0",
+				"0", "0", "-1";
 	};
 };
 
@@ -357,6 +520,20 @@
 			MATRIX_KEY(0, 2, KEY_VOLUMEUP)>;
 	wakeup-source;
 	status = "okay";
+};
+
+/*
+ * Camera DCAM capture engine & CSI-2 host
+ */
+&dcam {
+	status = "okay";
+};
+
+&dcam_phy_c {
+	dcam_front_in: endpoint {
+		remote-endpoint = <&front_camera_out>;
+		data-lanes = <1>;
+	};
 };
 
 /* Modem IPC channels */

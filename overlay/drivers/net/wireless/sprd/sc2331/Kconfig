@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config SPRD_SC2331
+	tristate "Spreadtrum SC2331 (Marlin 1) SDIO Wi-Fi support"
+	depends on CFG80211 && MMC && SERIAL_DEV_BUS
+	select FW_LOADER
+	help
+	  Driver for the Spreadtrum SC2331 ("Marlin 1") Wi-Fi/BT combo chip
+	  using UART0 Stage-1 FDL download and SDIO Stage-2 firmware/WLAN
+	  transport.

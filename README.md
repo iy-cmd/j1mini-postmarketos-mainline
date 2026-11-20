@@ -4,7 +4,7 @@
 
 A complete, daily-usable port of **Mainline Linux 7.3.1** and **postmarketOS (Alpine Linux + SXMO i3)** for the **Samsung Galaxy J1 Mini 3G** (`j1mini3g`, `SM-J105H`, `SM-J105F`, Spreadtrum/Unisoc SC7730 / SC8830 / SC7727S).
 
-Features hardware-accelerated Mali-400 graphics (Lima) with tear-free VSync compositing, working internal speaker & headphone audio over PipeWire, MELFAS MIP4 touchscreen, 480×800-tuned SXMO i3 mobile UI, GNOME Web, and plug-and-play USB networking & internet sharing.
+Features hardware-accelerated Mali-400 graphics (Lima) with tear-free VSync compositing, working **Wi-Fi & Bluetooth (`SC2331` Marlin 1)**, **KTD2801 backlight brightness**, **Bosch BMA255 accelerometer**, internal speaker & headphone audio over PipeWire, MELFAS MIP4 touchscreen, 480×800-tuned SXMO i3 mobile UI, GNOME Web, and plug-and-play USB networking & internet sharing.
 
 ---
 
@@ -14,16 +14,19 @@ Features hardware-accelerated Mali-400 graphics (Lima) with tear-free VSync comp
 |---|---|---|
 | **CPU (Quad Cortex-A7)** | Working | All 4 cores active in SMP (`7.3.1-j1mini+`) |
 | **Display (`S6D77A1` 480×800)** | Working | Hardware `sprd-dispc` takeover driver @ 58 Hz, race-free atomic VSYNC flips |
+| **Backlight (`KTD2801`)** | Working | Kinetic KTD2801 ExpressWire on GPIO 214 (`/sys/class/backlight/backlight`, `brightnessctl` 0–215) |
 | **GPU (`Mali-400 MP1`)** | Working | Mainline `lima` (OpenGL 2.1 / GLES 2.0, Mesa 26.2) + Xorg Glamor + `picom` VSync |
 | **Touchscreen (`MELFAS MIP4`)** | Working | Multitouch over I2C (`0x48`), `libinput`, SXMO edge gestures |
+| **Accelerometer (`Bosch BMA255`)** | Working | `bmc150_accel_i2c` @ `0x18` with calibrated `mount-matrix`, `iio-sensor-proxy` auto-rotation |
+| **Wi-Fi (`Spreadtrum SC2331 / Marlin 1`)** | Working | Custom mainline driver (`sc2331_boot` + `sc2331_wlan`): UART0 FDL + SDIO `0000:2331` FW/RF cal, 2.4 GHz WPA2 (~15 Mbps, iPhone hotspot compatible) |
+| **Bluetooth (`Spreadtrum SC2331 / Marlin 1`)** | Working | Custom H4 serdev driver (`sc2331_bt`) over UART0 @ 3.25 Mbps (48 MHz mux), PSKEY `0xFCA0`, BlueZ 4.0 BR/EDR + BLE, simultaneous Wi-Fi coexistence |
 | **Audio (Speaker, Headphones, Mic, Jack)** | Working | VBC r2p0 + AP DMA + SC2723 PMIC codec, ALSA UCM2 + **PipeWire / WirePlumber** |
 | **Hardware Buttons** | Working | Power, Home, Volume Up/Down (`Vol Down` toggles on-screen keyboard `svkbd`) |
-| **Storage (8 GB eMMC + microSD)** | Working | Full 2.1 GiB `SYSTEM` rootfs (`mmcblk0p25`) + 384 MiB swapfile |
+| **Storage (8 GB eMMC + microSD)** | Working | Supports full internal eMMC (`mmcblk0p27` 4.7 GiB `/` + `mmcblk0p25` 2.0 GiB `/home` + swap, or `mmcblk0p25` 2.1 GiB `/`) |
 | **USB Gadget (Network + Serial)** | Working | `CDC-NCM` Ethernet (`192.168.7.2`) + `CDC-ACM` serial console (`/dev/ttyACM0`), DWC2 PIO mode |
 | **USB Internet Sharing** | Working | Auto-configured NAT + DNS + `TTL=66` (works even behind carrier hotspot tether checks) |
 | **PMIC / Battery / Fuel Gauge** | Working | SC2723 PMIC regulators, EIC, ADC, FGU |
-| **Wi-Fi (`Spreadtrum SC2331 / Marlin 1`)** | In Progress | SDIO `0000:2331` — driver & firmware bring-up in progress (use USB internet in the meantime) |
-| **Bluetooth (`Spreadtrum SC2331`)** | In Progress | WCN combo chip bring-up in progress alongside Wi-Fi |
+| **Camera** | Not working yet | DCAM capture engine & sensor bring-up in progress; camera does not work yet |
 | **Cellular Modem** | Not supported | Proprietary Spreadtrum CP firmware stack |
 
 ---
@@ -157,17 +160,23 @@ What `build_from_source.sh` does:
 .
 ├── build_from_source.sh          # Containerized mainline Linux 7.3.1 kernel builder
 ├── source/
-│   ├── j1mini_defconfig          # Kernel configuration fragment for SM-J105H
+│   ├── j1mini.config             # Mainline kernel config fragment (Wi-Fi, BT, BMA255, KTD2801)
+│   ├── j1mini_defconfig          # Base kernel configuration for SM-J105H
 │   ├── sc7730-samsung-j1mini.dts # Device Tree for Samsung Galaxy J1 Mini 3G
 │   ├── linux-7.3.1-j1mini-cumulative.patch
 │   └── patches/                  # Individual SC7730/SC8830 bring-up patch series
+├── firmware/
+│   └── sc2331/                   # SC2331 (Marlin 1) FDL, main firmware & RF/BT INI files (copy to /lib/firmware/sprd/)
 ├── overlay/                      # Kernel driver fixes applied on top of Linux 7.3.1
 │   ├── arch/arm/boot/dts/unisoc/sc7730-samsung-j1mini.dts
-│   ├── arch/arm/mach-sprd/       # USB bring-up & PM domains
+│   ├── arch/arm/mach-sprd/       # USB bring-up, PM domains, UART0 48 MHz clock mux
 │   ├── drivers/gpu/drm/sprd/sprd_dispc.c   # Coherent DMA + race-free VSYNC flip latch
 │   ├── drivers/input/touchscreen/melfas_mip4.c
 │   ├── drivers/i2c/busses/i2c-sprd-sc8830.c
 │   ├── drivers/gpio/gpio-sprd.c
+│   ├── drivers/media/            # DCAM & camera sensor drivers (WIP, camera not working yet)
+│   ├── drivers/net/wireless/sprd/sc2331/   # Full SC2331 Wi-Fi + Bluetooth + FDL/SDIO boot driver
+│   ├── drivers/tty/serial/sprd_serial.c    # 3.25 Mbps baud support & rounded divisor for Marlin BT
 │   └── drivers/usb/dwc2/
 ├── rootfs-overlay/               # All postmarketOS userspace configs (PipeWire, UCM2, picom, SXMO, GTK)
 ├── scripts/
@@ -197,6 +206,16 @@ What `build_from_source.sh` does:
 3. **480×800 Mobile Ergonomics & Lightweight Browser**:
    - Configured exact `96×96 DPI` (`DisplaySize 127 212`), compact `Xresources` / `i3` / `conky` / GTK3 / GTK4 fonts, and fixed `svkbd` geometry (`-g 480x280+0+520`) bound to Volume Down.
    - Replaced heavy Firefox with **GNOME Web (`epiphany 50.6`)** configured for Mali-400 OpenGL 2.1 (`GDK_DISABLE=gl,vulkan`, `GSK_RENDERER=cairo`, `WEBKIT_DISABLE_DMABUF_RENDERER=1`, `WEBKIT_DISABLE_COMPOSITING_MODE=1`, `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1`), keeping total system RAM usage around ~170 MiB with browser open.
+4. **Spreadtrum SC2331 (Marlin 1) Wi-Fi + Bluetooth Combo Driver**:
+   - Implemented a complete mainline Linux 7.3 driver in `overlay/drivers/net/wireless/sprd/sc2331/`: Stage-1 UART0 HDLC FDL boot (`sc2331_fdl.bin`), Stage-2 SDIO firmware & RF calibration upload (`sc2331_fw.bin` + `connectivity_configure.ini` / `connectivity_calibration.ini`), Stage-3 FullMAC `cfg80211` Wi-Fi (`sc2331_wlan.c`), and Stage-3 H4 `serdev` Bluetooth (`sc2331_bt.c`).
+   - Added a 48 MHz UART0 clock mux driver (`clk-uart.c`) and patched `sprd_serial.c` (`SPRD_BAUD_IO_LIMIT = 3250000`, `DIV_ROUND_CLOSEST`) to match Marlin's 3.25 Mbps Bluetooth UART speed, plus stock-matched `wake_out`/`wake_ack` power management (`350 ms`/`200 ms`) for stable simultaneous Wi-Fi + Bluetooth operation.
+   - Copy `firmware/sc2331/*` to `/lib/firmware/sprd/` on the device when upgrading the kernel over an existing rootfs.
+5. **Backlight (`KTD2801`) & Accelerometer (`Bosch BMA255`)**:
+   - Enabled `CONFIG_BACKLIGHT_KTD2801` + `CONFIG_LEDS_EXPRESSWIRE` on GPIO 214 for hardware screen brightness control (`brightnessctl`).
+   - Enabled `CONFIG_BMC150_ACCEL_I2C` (`0x18`, `chip_id=0xfa`) with a calibrated `mount-matrix` (`-1, 0, 0; 0, 1, 0; 0, 0, -1`) for accurate `iio-sensor-proxy` orientation.
+6. **Camera (WIP — Not Working Yet)**:
+   - Initial DCAM capture engine and sensor drivers (`sr200pc20m` / `sr030pc50` / `gc0310`) are included in `overlay/drivers/media/` and wired in the Device Tree with power supplies (`vddcama`, `vddcamio`, `vddcammot`, `vddcamd`).
+   - Camera capture is currently in active development and **not working yet**.
 
 ---
 
